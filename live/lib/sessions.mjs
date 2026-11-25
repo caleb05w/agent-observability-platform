@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { livePath, sessionPath, SESSIONS_DIR } from './paths.mjs'
-import { DAY, SECOND } from './time.mjs'
+import { DAY, MINUTE, SECOND } from './time.mjs'
 import { delegatedTitles, displayTitle, safeTranscriptTitle } from './titles.mjs'
 import { applyResolved } from './resolved.mjs'
 import { applyT3Finished } from './t3-helpers.mjs'
@@ -45,16 +45,33 @@ export function deleteOldSessionFiles() {
   } catch {}
 }
 
-// The plan's usage windows, from whichever session reported them last.
+// The plan's usage windows. Every open session reports them as it last saw them, and an idle session keeps
+// rewriting an old reading, so the newest file is not the newest reading: taking it made the ring jump between
+// sessions' numbers. Usage only grows within a window, so per kind keep the window that resets last and, within
+// it, the highest percentage any session reported.
+const SAME_WINDOW_MS = 10 * MINUTE // reports of one window's reset time can differ slightly
 let limits = []
 let limitsAt = 0
 export const rateLimits = () => limits
 export const rateLimitsAt = () => limitsAt || null
+const resetMs = l => Date.parse(l.resetsAt) || 0
+function isNewerReading(l, cur) {
+  const gap = resetMs(l) - resetMs(cur)
+  if (Math.abs(gap) > SAME_WINDOW_MS) return gap > 0 // a later window
+  return (l.percentUsed ?? -1) > (cur.percentUsed ?? -1)
+}
 function noteLimits(data, mtime) {
-  if (Array.isArray(data.rateLimits) && data.rateLimits.length && mtime >= limitsAt) {
-    limits = data.rateLimits
-    limitsAt = mtime
+  if (!Array.isArray(data.rateLimits) || !data.rateLimits.length) return
+  let next = limits
+  for (const l of data.rateLimits) {
+    const i = next.findIndex(x => x.kind === l.kind)
+    if (i >= 0 && !isNewerReading(l, next[i])) continue
+    next = next === limits ? [...limits] : next
+    if (i >= 0) next[i] = l
+    else next.push(l)
   }
+  limits = next
+  limitsAt = Math.max(limitsAt, mtime)
 }
 
 // Sessions hidden from the dashboard (never deleted): { [sessionId]: hiddenAt }.
