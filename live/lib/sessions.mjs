@@ -52,9 +52,12 @@ export function deleteOldSessionFiles() {
 const SAME_WINDOW_MS = 10 * MINUTE // reports of one window's reset time can differ slightly
 let limits = []
 let limitsAt = 0
-export const rateLimits = () => limits
-export const rateLimitsAt = () => limitsAt || null
 const resetMs = l => Date.parse(l.resetsAt) || 0
+// A window whose reset time has passed is over: Claude stops reporting it (the 5-hour one after a quiet spell),
+// so drop it rather than keep showing its old percentage.
+const notExpired = l => !resetMs(l) || resetMs(l) > Date.now()
+export const rateLimits = () => limits.filter(notExpired)
+export const rateLimitsAt = () => limitsAt || null
 function isNewerReading(l, cur) {
   const gap = resetMs(l) - resetMs(cur)
   if (Math.abs(gap) > SAME_WINDOW_MS) return gap > 0 // a later window
@@ -70,7 +73,7 @@ function noteLimits(data, mtime) {
     if (i >= 0) next[i] = l
     else next.push(l)
   }
-  limits = next
+  limits = next.filter(notExpired)
   limitsAt = Math.max(limitsAt, mtime)
 }
 
@@ -167,7 +170,7 @@ function readSessionList(maxAge) {
 }
 
 function addWeekShares(rows) {
-  const week = limits.find(l => l.kind === 'seven_day')
+  const week = rateLimits().find(l => l.kind === 'seven_day')
   const start = week?.resetsAt ? Date.parse(week.resetsAt) - 7 * DAY : Date.now() - 7 * DAY
   const { out: shares } = weeklyShares(week ? week.percentUsed : null, start)
   for (const s of rows) {
